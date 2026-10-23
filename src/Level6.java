@@ -1094,12 +1094,17 @@ public class Level6 {
         // Pass 0: Aggressively remove any single line if removing it still passes verification
         // (most useful on over-conservative generated timelines)
         if (current.size() <= 1200) {
-            for (int i = current.size() - 1; i >= 0; i--) {
-                List<String> candidate = new ArrayList<>(current);
-                candidate.remove(i);
-                if (!candidate.isEmpty() && verifyAndTrimProgram(R, patternGrid, requiredCount, candidate)) {
-                    current = candidate;
-                    if (i > current.size()) i = current.size();
+            boolean changed = true;
+            while (changed) {
+                changed = false;
+                for (int i = current.size() - 1; i >= 0; i--) {
+                    List<String> candidate = new ArrayList<>(current);
+                    candidate.remove(i);
+                    if (!candidate.isEmpty() && verifyAndTrimProgram(R, patternGrid, requiredCount, candidate)) {
+                        current = candidate;
+                        changed = true;
+                        if (i > current.size()) i = current.size();
+                    }
                 }
             }
         }
@@ -1161,70 +1166,109 @@ public class Level6 {
         return Math.max(reqA, reqB);
     }
 
-    static List<Target> solvePairTSP(List<Target> targets, int startA, int startB, int P, boolean activeA, boolean activeB) {
-        if (targets.size() <= 1) return new ArrayList<>(targets);
-
-        List<Target> remaining = new ArrayList<>(targets);
-        List<Target> tour = new ArrayList<>(targets.size());
-
+    static int computePairTourCost(List<Target> tour, int startA, int startB, int P, boolean activeA, boolean activeB) {
         int curA = startA, curB = startB;
         boolean curActA = activeA, curActB = activeB;
-        while (!remaining.isEmpty()) {
-            int bestIdx = 0;
-            int bestCost = Integer.MAX_VALUE;
-            for (int i = 0; i < remaining.size(); i++) {
-                Target t = remaining.get(i);
-                int cost = pairTransitionCost(curA, curB, t.posA(), t.posB(), P, curActA, curActB);
-                if (cost < bestCost) {
-                    bestCost = cost;
-                    bestIdx = i;
-                }
-            }
-            Target next = remaining.remove(bestIdx);
-            tour.add(next);
-            curA = next.posA();
-            curB = next.posB();
+        int cost = 0;
+        for (Target t : tour) {
+            cost += pairTransitionCost(curA, curB, t.posA(), t.posB(), P, curActA, curActB);
+            curA = t.posA();
+            curB = t.posB();
             curActA = true;
             curActB = true;
         }
+        return cost;
+    }
 
-        // 2-opt local search
-        boolean improved = true;
-        int iter = 0;
-        while (improved && iter++ < 50) {
-            improved = false;
-            for (int i = 0; i < tour.size() - 1; i++) {
-                for (int j = i + 1; j < tour.size(); j++) {
-                    int prevA = (i == 0 ? startA : tour.get(i - 1).posA());
-                    int prevB = (i == 0 ? startB : tour.get(i - 1).posB());
-                    boolean prevActA = (i == 0 ? activeA : true);
-                    boolean prevActB = (i == 0 ? activeB : true);
+    static List<Target> solvePairTSP(List<Target> targets, int startA, int startB, int P, boolean activeA, boolean activeB) {
+        if (targets.size() <= 1) return new ArrayList<>(targets);
 
-                    int curCost = pairTransitionCost(prevA, prevB, tour.get(i).posA(), tour.get(i).posB(), P, prevActA, prevActB);
-                    for (int k = i; k < j; k++) {
-                        curCost += pairTransitionCost(tour.get(k).posA(), tour.get(k).posB(), tour.get(k + 1).posA(), tour.get(k + 1).posB(), P, true, true);
-                    }
-                    if (j + 1 < tour.size()) {
-                        curCost += pairTransitionCost(tour.get(j).posA(), tour.get(j).posB(), tour.get(j + 1).posA(), tour.get(j + 1).posB(), P, true, true);
-                    }
+        int attempts = Math.min(16, Math.max(1, targets.size() / 2));
+        Random rnd = (attempts > 1) ? new Random(31L * (targets.size() + 17) + startA * 97L + startB * 131L) : null;
 
-                    int revCost = pairTransitionCost(prevA, prevB, tour.get(j).posA(), tour.get(j).posB(), P, prevActA, prevActB);
-                    for (int k = j; k > i; k--) {
-                        revCost += pairTransitionCost(tour.get(k).posA(), tour.get(k).posB(), tour.get(k - 1).posA(), tour.get(k - 1).posB(), P, true, true);
-                    }
-                    if (j + 1 < tour.size()) {
-                        revCost += pairTransitionCost(tour.get(i).posA(), tour.get(i).posB(), tour.get(j + 1).posA(), tour.get(j + 1).posB(), P, true, true);
-                    }
+        List<Target> bestTour = null;
+        int bestTourCost = Integer.MAX_VALUE;
 
-                    if (revCost < curCost) {
-                        Collections.reverse(tour.subList(i, j + 1));
-                        improved = true;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            List<Target> remaining = new ArrayList<>(targets);
+            List<Target> tour = new ArrayList<>(targets.size());
+
+            int curA = startA, curB = startB;
+            boolean curActA = activeA, curActB = activeB;
+            while (!remaining.isEmpty()) {
+                int bestIdx = 0;
+                int bestCost = Integer.MAX_VALUE;
+                int secondIdx = -1;
+                int secondCost = Integer.MAX_VALUE;
+                for (int i = 0; i < remaining.size(); i++) {
+                    Target t = remaining.get(i);
+                    int cost = pairTransitionCost(curA, curB, t.posA(), t.posB(), P, curActA, curActB);
+                    if (cost < bestCost) {
+                        secondCost = bestCost;
+                        secondIdx = bestIdx;
+                        bestCost = cost;
+                        bestIdx = i;
+                    } else if (cost < secondCost) {
+                        secondCost = cost;
+                        secondIdx = i;
+                    }
+                }
+                int pickIdx = bestIdx;
+                if (attempt > 0 && secondIdx != -1 && secondCost <= bestCost + 1 && rnd.nextInt(4) == 0) {
+                    pickIdx = secondIdx;
+                }
+                Target next = remaining.remove(pickIdx);
+                tour.add(next);
+                curA = next.posA();
+                curB = next.posB();
+                curActA = true;
+                curActB = true;
+            }
+
+            // 2-opt local search
+            boolean improved = true;
+            int iter = 0;
+            while (improved && iter++ < 50) {
+                improved = false;
+                for (int i = 0; i < tour.size() - 1; i++) {
+                    for (int j = i + 1; j < tour.size(); j++) {
+                        int prevA = (i == 0 ? startA : tour.get(i - 1).posA());
+                        int prevB = (i == 0 ? startB : tour.get(i - 1).posB());
+                        boolean prevActA = (i == 0 ? activeA : true);
+                        boolean prevActB = (i == 0 ? activeB : true);
+
+                        int curCost = pairTransitionCost(prevA, prevB, tour.get(i).posA(), tour.get(i).posB(), P, prevActA, prevActB);
+                        for (int k = i; k < j; k++) {
+                            curCost += pairTransitionCost(tour.get(k).posA(), tour.get(k).posB(), tour.get(k + 1).posA(), tour.get(k + 1).posB(), P, true, true);
+                        }
+                        if (j + 1 < tour.size()) {
+                            curCost += pairTransitionCost(tour.get(j).posA(), tour.get(j).posB(), tour.get(j + 1).posA(), tour.get(j + 1).posB(), P, true, true);
+                        }
+
+                        int revCost = pairTransitionCost(prevA, prevB, tour.get(j).posA(), tour.get(j).posB(), P, prevActA, prevActB);
+                        for (int k = j; k > i; k--) {
+                            revCost += pairTransitionCost(tour.get(k).posA(), tour.get(k).posB(), tour.get(k - 1).posA(), tour.get(k - 1).posB(), P, true, true);
+                        }
+                        if (j + 1 < tour.size()) {
+                            revCost += pairTransitionCost(tour.get(i).posA(), tour.get(i).posB(), tour.get(j + 1).posA(), tour.get(j + 1).posB(), P, true, true);
+                        }
+
+                        if (revCost < curCost) {
+                            Collections.reverse(tour.subList(i, j + 1));
+                            improved = true;
+                        }
                     }
                 }
             }
+
+            int tourCost = computePairTourCost(tour, startA, startB, P, activeA, activeB);
+            if (tourCost < bestTourCost) {
+                bestTourCost = tourCost;
+                bestTour = new ArrayList<>(tour);
+            }
         }
 
-        return tour;
+        return bestTour;
     }
 
     static List<String> generateDirectedPair(BoardMeta meta, List<Target> rawTargets, int trackA, int trackB, int requiredCount) {
@@ -1374,7 +1418,7 @@ public class Level6 {
         }
 
         // 4. Evaluate 6-Emitter Wavefront Scheduler (deterministic + multi-start randomized)
-        int restarts = (mCells.size() * requiredCount <= 120) ? 256 : 128;
+        int restarts = (mCells.size() * requiredCount <= 120) ? 1024 : 512;
         for (int seed = 0; seed < restarts; seed++) {
             int limit = (bestProg != null) ? bestProg.size() : Integer.MAX_VALUE;
             List<String> parProg = solveWavefrontSixEmitter(meta, requiredCount, seed, limit);
