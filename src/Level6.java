@@ -69,61 +69,109 @@ public class Level6 {
         return lookup;
     }
 
-    static List<Target> solveTSP(List<Target> targets, int startA, int startB, int P) {
-        if (targets.size() <= 2) return new ArrayList<>(targets);
+    static int transitionCost(int curA, int curB, int nextA, int nextB, int P, boolean activeA, boolean activeB) {
+        int sA = dist(curA, nextA, P);
+        int sB = dist(curB, nextB, P);
+        int reqA = (activeA ? 1 : 0) + sA + 1; // turn off (if active) + move + turn on
+        int reqB = (!activeB ? 1 : 0) + sB;   // turn on (if inactive) + move
+        return Math.max(reqA, reqB);
+    }
 
-        List<Target> tour = new ArrayList<>();
-        List<Target> remaining = new ArrayList<>(targets);
+    static int computeTourCost(List<Target> tour, int startA, int startB, int P, boolean activeA, boolean activeB) {
+        if (tour.isEmpty()) return 0;
+        int cost = transitionCost(startA, startB, tour.get(0).posA, tour.get(0).posB, P, activeA, activeB);
+        for (int i = 0; i < tour.size() - 1; i++) {
+            cost += transitionCost(tour.get(i).posA, tour.get(i).posB, tour.get(i + 1).posA, tour.get(i + 1).posB, P, true, true);
+        }
+        return cost;
+    }
 
-        int curA = startA, curB = startB;
-        while (!remaining.isEmpty()) {
-            int bestIdx = 0;
-            int bestD = Integer.MAX_VALUE;
-            for (int i = 0; i < remaining.size(); i++) {
-                Target t = remaining.get(i);
-                int d = Math.max(dist(curA, t.posA, P), dist(curB, t.posB, P));
-                if (d < bestD) {
-                    bestD = d;
-                    bestIdx = i;
+    static List<Target> solveTSP(List<Target> targets, int startA, int startB, int P, boolean activeA, boolean activeB) {
+        if (targets.size() <= 1) return new ArrayList<>(targets);
+
+        List<Target> bestOverallTour = null;
+        int bestOverallCost = Integer.MAX_VALUE;
+
+        int startsToTry = Math.min(targets.size(), 8);
+        for (int firstChoice = -1; firstChoice < startsToTry; firstChoice++) {
+            List<Target> remaining = new ArrayList<>(targets);
+            List<Target> tour = new ArrayList<>();
+
+            int curA = startA, curB = startB;
+            boolean curActA = activeA, curActB = activeB;
+
+            if (firstChoice >= 0) {
+                Target first = remaining.remove(firstChoice);
+                tour.add(first);
+                curA = first.posA;
+                curB = first.posB;
+                curActA = true;
+                curActB = true;
+            }
+
+            while (!remaining.isEmpty()) {
+                int bestIdx = 0;
+                int bestCost = Integer.MAX_VALUE;
+                for (int i = 0; i < remaining.size(); i++) {
+                    Target t = remaining.get(i);
+                    int cost = transitionCost(curA, curB, t.posA, t.posB, P, curActA, curActB);
+                    if (cost < bestCost) {
+                        bestCost = cost;
+                        bestIdx = i;
+                    }
+                }
+                Target next = remaining.remove(bestIdx);
+                tour.add(next);
+                curA = next.posA;
+                curB = next.posB;
+                curActA = true;
+                curActB = true;
+            }
+
+            // 2-opt
+            boolean improved = true;
+            int iter = 0;
+            while (improved && iter++ < 40) {
+                improved = false;
+                for (int i = 0; i < tour.size() - 1; i++) {
+                    for (int j = i + 1; j < tour.size(); j++) {
+                        int prevA = (i == 0 ? startA : tour.get(i - 1).posA);
+                        int prevB = (i == 0 ? startB : tour.get(i - 1).posB);
+                        boolean prevActA = (i == 0 ? activeA : true);
+                        boolean prevActB = (i == 0 ? activeB : true);
+
+                        int curCost = transitionCost(prevA, prevB, tour.get(i).posA, tour.get(i).posB, P, prevActA, prevActB);
+                        for (int k = i; k < j; k++) {
+                            curCost += transitionCost(tour.get(k).posA, tour.get(k).posB, tour.get(k + 1).posA, tour.get(k + 1).posB, P, true, true);
+                        }
+                        if (j + 1 < tour.size()) {
+                            curCost += transitionCost(tour.get(j).posA, tour.get(j).posB, tour.get(j + 1).posA, tour.get(j + 1).posB, P, true, true);
+                        }
+
+                        int revCost = transitionCost(prevA, prevB, tour.get(j).posA, tour.get(j).posB, P, prevActA, prevActB);
+                        for (int k = j; k > i; k--) {
+                            revCost += transitionCost(tour.get(k).posA, tour.get(k).posB, tour.get(k - 1).posA, tour.get(k - 1).posB, P, true, true);
+                        }
+                        if (j + 1 < tour.size()) {
+                            revCost += transitionCost(tour.get(i).posA, tour.get(i).posB, tour.get(j + 1).posA, tour.get(j + 1).posB, P, true, true);
+                        }
+
+                        if (revCost < curCost) {
+                            Collections.reverse(tour.subList(i, j + 1));
+                            improved = true;
+                        }
+                    }
                 }
             }
-            Target next = remaining.remove(bestIdx);
-            tour.add(next);
-            curA = next.posA;
-            curB = next.posB;
-        }
 
-        // 2-opt improvement with iteration limit
-        boolean improved = true;
-        int iter = 0;
-        int maxIter = 40;
-        while (improved && iter++ < maxIter) {
-            improved = false;
-            for (int i = 0; i < tour.size() - 1; i++) {
-                for (int j = i + 1; j < tour.size(); j++) {
-                    int prevA = (i == 0 ? startA : tour.get(i - 1).posA);
-                    int prevB = (i == 0 ? startB : tour.get(i - 1).posB);
-                    int curCost = Math.max(dist(prevA, tour.get(i).posA, P), dist(prevB, tour.get(i).posB, P));
-                    if (j + 1 < tour.size()) {
-                        curCost += Math.max(dist(tour.get(j).posA, tour.get(j + 1).posA, P),
-                                            dist(tour.get(j).posB, tour.get(j + 1).posB, P));
-                    }
-
-                    int newCost = Math.max(dist(prevA, tour.get(j).posA, P), dist(prevB, tour.get(j).posB, P));
-                    if (j + 1 < tour.size()) {
-                        newCost += Math.max(dist(tour.get(i).posA, tour.get(j + 1).posA, P),
-                                            dist(tour.get(i).posB, tour.get(j + 1).posB, P));
-                    }
-
-                    if (newCost < curCost) {
-                        Collections.reverse(tour.subList(i, j + 1));
-                        improved = true;
-                    }
-                }
+            int finalCost = computeTourCost(tour, startA, startB, P, activeA, activeB);
+            if (finalCost < bestOverallCost) {
+                bestOverallCost = finalCost;
+                bestOverallTour = tour;
             }
         }
 
-        return tour;
+        return bestOverallTour;
     }
 
     public static List<String> generateForPair(int R, List<Target> rawTargets, int trackA, int trackB, int requiredCount, int P) {
@@ -135,7 +183,7 @@ public class Level6 {
         List<String> program = new ArrayList<>();
 
         for (int cycle = 0; cycle < requiredCount; cycle++) {
-            List<Target> cycleTargets = solveTSP(rawTargets, posA, posB, P);
+            List<Target> cycleTargets = solveTSP(rawTargets, posA, posB, P, activeA, activeB);
 
             for (Target target : cycleTargets) {
                 int destA = target.posA;
@@ -146,38 +194,40 @@ public class Level6 {
                 String dirA = getMoveDir(posA, destA, P);
                 String dirB = getMoveDir(posB, destB, P);
 
-                List<String> moveCmdsA = new ArrayList<>();
-                if (activeA) {
-                    moveCmdsA.add("T");
-                    activeA = false;
-                }
-                for (int s = 0; s < sA; s++) moveCmdsA.add(dirA);
+                List<String> actionsA = new ArrayList<>();
+                if (activeA) actionsA.add("T");
+                for (int s = 0; s < sA; s++) actionsA.add(dirA);
+                actionsA.add("T");
 
-                List<String> moveCmdsB = new ArrayList<>();
-                if (!activeB) {
-                    moveCmdsB.add("T");
-                    activeB = true;
-                }
-                for (int s = 0; s < sB; s++) moveCmdsB.add(dirB);
+                List<String> actionsB = new ArrayList<>();
+                if (!activeB) actionsB.add("T");
+                for (int s = 0; s < sB; s++) actionsB.add(dirB);
 
-                int totalMoveSteps = Math.max(moveCmdsA.size(), moveCmdsB.size());
-                for (int step = 0; step < totalMoveSteps; step++) {
-                    String cmdA = step < moveCmdsA.size() ? moveCmdsA.get(step) : "-";
-                    String cmdB = step < moveCmdsB.size() ? moveCmdsB.get(step) : "-";
-                    String[] line = new String[]{"-", "-", "-", "-", "-", "-"};
-                    line[trackA] = cmdA;
-                    line[trackB] = cmdB;
+                int totalTicks = Math.max(actionsA.size(), actionsB.size());
+                String[] scheduledA = new String[totalTicks];
+                Arrays.fill(scheduledA, "-");
+                for (int i = 0; i < actionsA.size() - 1; i++) {
+                    scheduledA[i] = actionsA.get(i);
+                }
+                scheduledA[totalTicks - 1] = "T";
+
+                String[] scheduledB = new String[totalTicks];
+                Arrays.fill(scheduledB, "-");
+                for (int i = 0; i < actionsB.size(); i++) {
+                    scheduledB[i] = actionsB.get(i);
+                }
+
+                for (int tick = 0; tick < totalTicks; tick++) {
+                    String[] line = {"-", "-", "-", "-", "-", "-"};
+                    line[trackA] = scheduledA[tick];
+                    line[trackB] = scheduledB[tick];
                     program.add(String.join(" ", line));
                 }
 
                 posA = destA;
                 posB = destB;
-
-                // Fire
-                String[] fireLine = new String[]{"-", "-", "-", "-", "-", "-"};
-                fireLine[trackA] = "T";
-                program.add(String.join(" ", fireLine));
                 activeA = true;
+                activeB = true;
             }
         }
 
@@ -193,9 +243,8 @@ public class Level6 {
 
         for (int tA = 0; tA < 6; tA++) {
             for (int tB = 0; tB < 6; tB++) {
-                if (tA == tB || Math.abs(tA - tB) == 3) continue; // skip parallel
+                if (tA == tB || Math.abs(tA - tB) == 3) continue;
 
-                // Check if all mCells are reachable by this pair
                 List<Target> targets = new ArrayList<>(mCells.size());
                 boolean possible = true;
                 for (Point p : mCells) {
@@ -218,7 +267,6 @@ public class Level6 {
         return bestProgram;
     }
 
-    // Full simulator to verify correctness on the fly
     static class Simulator {
         final int R, numRows, numCols, pRows, pCols, requiredCount;
         final List<Point> perimeter;
@@ -413,7 +461,7 @@ public class Level6 {
         if (Files.exists(largeIn)) {
             System.out.println("Processing Large...");
             String result = processFile(largeIn);
-            Files.writeString(medOut.resolveSibling("out_level-6_3-large.txt"), result);
+            Files.writeString(largeOut, result);
         }
 
         // Enormous
