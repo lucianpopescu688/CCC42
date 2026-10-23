@@ -75,14 +75,27 @@ public class Level6 {
             }
         }
 
-        List<String> batchedProgram = generateUsingCandidates(radius, cells, count, perimeterLength, batchCandidates);
-        List<String> singleCellProgram = generateUsingCandidates(radius, cells, count, perimeterLength,
-                singleCellCandidates);
-        return batchedProgram.size() < singleCellProgram.size() ? batchedProgram : singleCellProgram;
+        List<String> bestProgram = null;
+        for (int strategy = 0; strategy < 4; strategy++) {
+            for (int idleLookahead = 1; idleLookahead <= 2; idleLookahead++) {
+                List<String> batchedProgram = generateUsingCandidates(
+                        radius, cells, count, perimeterLength, batchCandidates, strategy, idleLookahead);
+                if (bestProgram == null || batchedProgram.size() < bestProgram.size()) {
+                    bestProgram = batchedProgram;
+                }
+            }
+        }
+        for (int idleLookahead = 1; idleLookahead <= 2; idleLookahead++) {
+            List<String> singleCellProgram = generateUsingCandidates(
+                    radius, cells, count, perimeterLength, singleCellCandidates, 0, idleLookahead);
+            if (singleCellProgram.size() < bestProgram.size()) bestProgram = singleCellProgram;
+        }
+        return bestProgram;
     }
 
     private static List<String> generateUsingCandidates(int radius, List<Level5.Point> cells, int count,
-                                                         int perimeterLength, List<Candidate> candidates) {
+                                                         int perimeterLength, List<Candidate> candidates,
+                                                         int strategy, int idleLookahead) {
         int[] positions = {5 * radius, 0, radius, 2 * radius, 3 * radius, 4 * radius};
         boolean[] active = new boolean[6];
         List<String> program = new ArrayList<>();
@@ -90,20 +103,7 @@ public class Level6 {
         for (int repetition = 0; repetition < count; repetition++) {
             Set<Level5.Point> remaining = new HashSet<>(cells);
             while (!remaining.isEmpty()) {
-                Candidate best = null;
-                for (Candidate candidate : candidates) {
-                    int gain = 0;
-                    for (Level5.Point cell : candidate.cells()) {
-                        if (remaining.contains(cell)) gain++;
-                    }
-                    if (gain == 0) continue;
-
-                    int cost = transitionCost(candidate, positions, active, perimeterLength);
-                    if (best == null || isBetterCandidate(candidate, gain, cost, best, remaining,
-                            positions, active, perimeterLength)) {
-                        best = candidate;
-                    }
-                }
+                Candidate best = selectCandidate(candidates, remaining, positions, active, perimeterLength, strategy);
                 if (best == null) {
                     throw new IllegalStateException("No emitter pair can create remaining target cells " + remaining);
                 }
@@ -113,6 +113,13 @@ public class Level6 {
                 int distance = Math.max(firstDistance, secondDistance);
                 int firstDirection = movementDirection(positions[best.firstEmitter()], best.firstPosition(), perimeterLength);
                 int secondDirection = movementDirection(positions[best.secondEmitter()], best.secondPosition(), perimeterLength);
+                Set<Level5.Point> afterBest = new HashSet<>(remaining);
+                afterBest.removeAll(best.cells());
+                int[] plannedPositions = positions.clone();
+                boolean[] plannedActive = active.clone();
+                applyTransition(best, plannedPositions, plannedActive, perimeterLength);
+                List<Candidate> futureRoute = planFutureRoute(candidates, afterBest, plannedPositions,
+                        plannedActive, perimeterLength, strategy, idleLookahead);
                 if (distance > 0) {
                     boolean[] wasActive = active.clone();
                     char[] firstMovement = noops();
@@ -128,6 +135,7 @@ public class Level6 {
                     if (!wasActive[best.secondEmitter()] && positions[best.secondEmitter()] != best.secondPosition()) {
                         moveEmitter(firstMovement, positions, best.secondEmitter(), secondDirection, perimeterLength);
                     }
+                    moveIdleEmittersAlongRoute(futureRoute, best, firstMovement, positions, active, perimeterLength);
                     program.add(format(firstMovement));
 
                     while (positions[best.firstEmitter()] != best.firstPosition()
@@ -139,6 +147,7 @@ public class Level6 {
                         if (positions[best.secondEmitter()] != best.secondPosition()) {
                             moveEmitter(movement, positions, best.secondEmitter(), secondDirection, perimeterLength);
                         }
+                        moveIdleEmittersAlongRoute(futureRoute, best, movement, positions, active, perimeterLength);
                         program.add(format(movement));
                     }
                 }
@@ -151,12 +160,231 @@ public class Level6 {
                         active[emitter] = shouldBeActive;
                     }
                 }
-                program.add(format(fire));
                 remaining.removeAll(best.cells());
+                if (!remaining.isEmpty()) {
+                    Candidate next = selectCandidate(candidates, remaining, positions, active, perimeterLength,
+                            strategy);
+                    if (next != null) {
+                        moveIdleEmittersAlongRoute(List.of(next), null, fire, positions, active, perimeterLength);
+                    }
+                }
+                program.add(format(fire));
             }
         }
 
         return program;
+    }
+
+    private static List<Candidate> planFutureRoute(List<Candidate> candidates, Set<Level5.Point> remaining,
+                                                   int[] positions, boolean[] active, int perimeterLength,
+                                                   int strategy, int idleLookahead) {
+        List<Candidate> route = new ArrayList<>(idleLookahead);
+        Set<Level5.Point> futureRemaining = new HashSet<>(remaining);
+        int[] futurePositions = positions.clone();
+        boolean[] futureActive = active.clone();
+        for (int step = 0; step < idleLookahead && !futureRemaining.isEmpty(); step++) {
+            int selectionStrategy = step == 0 ? strategy : 2;
+            Candidate next = selectCandidate(candidates, futureRemaining, futurePositions, futureActive,
+                    perimeterLength, selectionStrategy);
+            if (next == null) break;
+            route.add(next);
+            futureRemaining.removeAll(next.cells());
+            applyTransition(next, futurePositions, futureActive, perimeterLength);
+        }
+        return route;
+    }
+
+    private static Candidate selectCandidate(List<Candidate> candidates, Set<Level5.Point> remaining,
+                                             int[] positions, boolean[] active, int perimeterLength, int strategy) {
+        if (strategy == 3) {
+            return selectWithLookahead(candidates, remaining, positions, active, perimeterLength);
+        }
+
+        Candidate best = null;
+        int bestGain = 0;
+        int bestCost = Integer.MAX_VALUE;
+        for (Candidate candidate : candidates) {
+            int gain = 0;
+            for (Level5.Point cell : candidate.cells()) {
+                if (remaining.contains(cell)) gain++;
+            }
+            if (gain == 0) continue;
+
+            int cost = transitionCost(candidate, positions, active, perimeterLength);
+            boolean better;
+            if (best == null) {
+                better = true;
+            } else if (strategy == 1) {
+                better = gain > bestGain || (gain == bestGain && cost < bestCost);
+            } else if (strategy == 2) {
+                better = cost < bestCost || (cost == bestCost && gain > bestGain);
+            } else {
+                better = (long) gain * bestCost > (long) bestGain * cost
+                        || ((long) gain * bestCost == (long) bestGain * cost && cost < bestCost);
+            }
+            if (better) {
+                best = candidate;
+                bestGain = gain;
+                bestCost = cost;
+            }
+        }
+        return best;
+    }
+
+    private static Candidate selectWithLookahead(List<Candidate> candidates, Set<Level5.Point> remaining,
+                                                 int[] positions, boolean[] active, int perimeterLength) {
+        List<Candidate> firstChoices = topCandidates(candidates, remaining, positions, active, perimeterLength, 4);
+        Candidate bestFirst = null;
+        double bestValue = -1;
+        int bestCovered = 0;
+        int bestCost = Integer.MAX_VALUE;
+
+        for (Candidate first : firstChoices) {
+            int[] firstPositions = positions.clone();
+            boolean[] firstActive = active.clone();
+            Set<Level5.Point> afterFirst = new HashSet<>(remaining);
+            int firstGain = removeCovered(first, afterFirst);
+            int firstCost = transitionCost(first, firstPositions, firstActive, perimeterLength);
+            applyTransition(first, firstPositions, firstActive, perimeterLength);
+
+            List<Candidate> secondChoices = topCandidates(
+                    candidates, afterFirst, firstPositions, firstActive, perimeterLength, 4);
+            if (secondChoices.isEmpty()) {
+                double value = (double) firstGain / firstCost;
+                if (value > bestValue) {
+                    bestFirst = first;
+                    bestValue = value;
+                    bestCovered = firstGain;
+                    bestCost = firstCost;
+                }
+                continue;
+            }
+
+            for (Candidate second : secondChoices) {
+                int[] secondPositions = firstPositions.clone();
+                boolean[] secondActive = firstActive.clone();
+                Set<Level5.Point> afterSecond = new HashSet<>(afterFirst);
+                int secondGain = removeCovered(second, afterSecond);
+                int secondCost = transitionCost(second, secondPositions, secondActive, perimeterLength);
+                applyTransition(second, secondPositions, secondActive, perimeterLength);
+
+                List<Candidate> thirdChoices = topCandidates(
+                        candidates, afterSecond, secondPositions, secondActive, perimeterLength, 4);
+                int thirdGain = 0;
+                int thirdCost = 0;
+                if (!thirdChoices.isEmpty()) {
+                    Candidate third = thirdChoices.get(0);
+                    thirdGain = gain(third, afterSecond);
+                    thirdCost = transitionCost(third, secondPositions, secondActive, perimeterLength);
+                }
+
+                int covered = firstGain + secondGain + thirdGain;
+                int cost = firstCost + secondCost + thirdCost;
+                double value = (double) covered / cost;
+                if (value > bestValue || (value == bestValue && covered > bestCovered)
+                        || (value == bestValue && covered == bestCovered && cost < bestCost)) {
+                    bestFirst = first;
+                    bestValue = value;
+                    bestCovered = covered;
+                    bestCost = cost;
+                }
+            }
+        }
+        return bestFirst;
+    }
+
+    private static List<Candidate> topCandidates(List<Candidate> candidates, Set<Level5.Point> remaining,
+                                                int[] positions, boolean[] active, int perimeterLength, int limit) {
+        List<Candidate> result = new ArrayList<>(limit);
+        List<Double> values = new ArrayList<>(limit);
+        for (Candidate candidate : candidates) {
+            int candidateGain = gain(candidate, remaining);
+            if (candidateGain == 0) continue;
+            double value = (double) candidateGain
+                    / transitionCost(candidate, positions, active, perimeterLength);
+            int insertion = 0;
+            while (insertion < values.size() && values.get(insertion) >= value) insertion++;
+            if (insertion >= limit) continue;
+            result.add(insertion, candidate);
+            values.add(insertion, value);
+            if (result.size() > limit) {
+                result.remove(limit);
+                values.remove(limit);
+            }
+        }
+        return result;
+    }
+
+    private static int gain(Candidate candidate, Set<Level5.Point> remaining) {
+        int result = 0;
+        for (Level5.Point cell : candidate.cells()) {
+            if (remaining.contains(cell)) result++;
+        }
+        return result;
+    }
+
+    private static int removeCovered(Candidate candidate, Set<Level5.Point> remaining) {
+        int before = remaining.size();
+        remaining.removeAll(candidate.cells());
+        return before - remaining.size();
+    }
+
+    private static void applyTransition(Candidate candidate, int[] positions, boolean[] active, int perimeterLength) {
+        int[] emitters = {candidate.firstEmitter(), candidate.secondEmitter()};
+        int[] destinations = {candidate.firstPosition(), candidate.secondPosition()};
+        int[] directions = new int[2];
+        for (int i = 0; i < emitters.length; i++) {
+            directions[i] = movementDirection(positions[emitters[i]], destinations[i], perimeterLength);
+        }
+
+        boolean[] wasActive = active.clone();
+        int[] distances = {
+                circularDistance(positions[emitters[0]], destinations[0], perimeterLength),
+                circularDistance(positions[emitters[1]], destinations[1], perimeterLength)
+        };
+        int activeMoves = Math.max(wasActive[emitters[0]] ? distances[0] : 0,
+                wasActive[emitters[1]] ? distances[1] : 0);
+        int inactiveMoves = Math.max(wasActive[emitters[0]] ? 0 : distances[0],
+                wasActive[emitters[1]] ? 0 : distances[1]);
+        if (activeMoves + inactiveMoves > 0) {
+            for (int emitter = 0; emitter < active.length; emitter++) active[emitter] = false;
+            for (int i = 0; i < emitters.length; i++) {
+                int emitter = emitters[i];
+                if (!wasActive[emitter]
+                        && circularDistance(positions[emitter], destinations[i], perimeterLength) > 0) {
+                    positions[emitter] = (positions[emitter] + directions[i] + perimeterLength) % perimeterLength;
+                }
+            }
+            int movementTicks = Math.max(activeMoves, Math.max(0, inactiveMoves - 1));
+            for (int step = 0; step < movementTicks; step++) {
+                for (int i = 0; i < emitters.length; i++) {
+                    int emitter = emitters[i];
+                    if (positions[emitter] != destinations[i]) {
+                        positions[emitter] = (positions[emitter] + directions[i] + perimeterLength) % perimeterLength;
+                    }
+                }
+            }
+        }
+        for (int emitter = 0; emitter < active.length; emitter++) {
+            active[emitter] = emitter == candidate.firstEmitter() || emitter == candidate.secondEmitter();
+        }
+    }
+
+    private static void moveIdleEmittersAlongRoute(List<Candidate> route, Candidate current, char[] instruction,
+                                                   int[] positions, boolean[] active, int perimeterLength) {
+        for (int emitter = 0; emitter < active.length; emitter++) {
+            if (active[emitter] || instruction[emitter] != '-') continue;
+            for (Candidate candidate : route) {
+                if (current != null
+                        && (emitter == current.firstEmitter() || emitter == current.secondEmitter())) break;
+                int destination = candidate.firstEmitter() == emitter ? candidate.firstPosition()
+                        : candidate.secondEmitter() == emitter ? candidate.secondPosition() : -1;
+                if (destination < 0 || destination == positions[emitter]) continue;
+                int direction = movementDirection(positions[emitter], destination, perimeterLength);
+                moveEmitter(instruction, positions, emitter, direction, perimeterLength);
+                break;
+            }
+        }
     }
 
     private static int transitionCost(Candidate candidate, int[] positions, boolean[] active, int perimeterLength) {
@@ -183,20 +411,6 @@ public class Level6 {
             movementTicks = 1 + Math.max(activeMoves, Math.max(0, inactiveMoves - 1));
         }
         return movementTicks + 1;
-    }
-
-    private static boolean isBetterCandidate(Candidate candidate, int gain, int cost, Candidate best,
-                                             Set<Level5.Point> remaining, int[] positions, boolean[] active,
-                                             int perimeterLength) {
-        int bestGain = 0;
-        for (Level5.Point cell : best.cells()) {
-            if (remaining.contains(cell)) bestGain++;
-        }
-        int bestCost = transitionCost(best, positions, active, perimeterLength);
-        long comparison = (long) gain * bestCost - (long) bestGain * cost;
-        if (comparison != 0) return comparison > 0;
-        if (gain != bestGain) return gain > bestGain;
-        return cost < bestCost;
     }
 
     private static int circularDistance(int from, int to, int perimeterLength) {
