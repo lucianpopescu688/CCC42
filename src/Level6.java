@@ -6,8 +6,7 @@ import java.util.*;
 
 public class Level6 {
 
-    record Point(int r, int c) {}
-    record Target(Point cell, int posA, int posB) {}
+    public record Point(int r, int c) {}
 
     static final int[][] FIRE_OV = {
             {0, 2},   // 0: E
@@ -18,7 +17,7 @@ public class Level6 {
             {-1, 1}   // 5: NE
     };
 
-    static List<Point> buildPerimeter(int R) {
+    public static List<Point> buildPerimeter(int R) {
         List<Point> perim = new ArrayList<>();
         int curC = 0, curR = R;
         int[][] perimDirs = {{-1, 1}, {0, 2}, {1, 1}, {1, -1}, {0, -2}, {-1, -1}};
@@ -32,19 +31,19 @@ public class Level6 {
         return perim;
     }
 
-    static int dist(int from, int to, int P) {
+    public static int dist(int from, int to, int P) {
         int d = Math.abs(to - from);
         return Math.min(d, P - d);
     }
 
-    static String getMoveDir(int from, int to, int P) {
+    public static String getMoveDir(int from, int to, int P) {
         if (from == to) return "-";
         int cw = (to - from + P) % P;
         int ccw = (from - to + P) % P;
         return cw <= ccw ? "F" : "B";
     }
 
-    static int[][][] precomputePerimLookups(int R, List<Point> perim) {
+    public static int[][][] precomputePerimLookups(int R, List<Point> perim) {
         int numRows = 2 * R + 1;
         int numCols = 4 * R + 1;
         int P = perim.size();
@@ -69,205 +68,117 @@ public class Level6 {
         return lookup;
     }
 
-    static int transitionCost(int curA, int curB, int nextA, int nextB, int P, boolean activeA, boolean activeB) {
-        int sA = dist(curA, nextA, P);
-        int sB = dist(curB, nextB, P);
-        int reqA = (activeA ? 1 : 0) + sA + 1; // turn off (if active) + move + turn on
-        int reqB = (!activeB ? 1 : 0) + sB;   // turn on (if inactive) + move
-        return Math.max(reqA, reqB);
-    }
+    record Candidate(Point p, int u, int v, int fireTick, int totalDist, int distU, int distV) {}
 
-    static int computeTourCost(List<Target> tour, int startA, int startB, int P, boolean activeA, boolean activeB) {
-        if (tour.isEmpty()) return 0;
-        int cost = transitionCost(startA, startB, tour.get(0).posA, tour.get(0).posB, P, activeA, activeB);
-        for (int i = 0; i < tour.size() - 1; i++) {
-            cost += transitionCost(tour.get(i).posA, tour.get(i).posB, tour.get(i + 1).posA, tour.get(i + 1).posB, P, true, true);
-        }
-        return cost;
-    }
+    static List<String> solveGRASP(int R, List<Point> perim, int[][][] lookups, int requiredCount, List<Point> mCells, Random rng, double greediness) {
+        int P = perim.size();
 
-    static List<Target> solveTSP(List<Target> targets, int startA, int startB, int P, boolean activeA, boolean activeB) {
-        if (targets.size() <= 1) return new ArrayList<>(targets);
+        @SuppressWarnings("unchecked")
+        List<String>[] cmds = new List[6];
+        for (int i = 0; i < 6; i++) cmds[i] = new ArrayList<>();
 
-        List<Target> bestOverallTour = null;
-        int bestOverallCost = Integer.MAX_VALUE;
+        int[] pos = new int[6];
+        for (int i = 0; i < 6; i++) pos[i] = i * R;
 
-        int startsToTry = Math.min(targets.size(), 8);
-        for (int firstChoice = -1; firstChoice < startsToTry; firstChoice++) {
-            List<Target> remaining = new ArrayList<>(targets);
-            List<Target> tour = new ArrayList<>();
-
-            int curA = startA, curB = startB;
-            boolean curActA = activeA, curActB = activeB;
-
-            if (firstChoice >= 0) {
-                Target first = remaining.remove(firstChoice);
-                tour.add(first);
-                curA = first.posA;
-                curB = first.posB;
-                curActA = true;
-                curActB = true;
-            }
-
-            while (!remaining.isEmpty()) {
-                int bestIdx = 0;
-                int bestCost = Integer.MAX_VALUE;
-                for (int i = 0; i < remaining.size(); i++) {
-                    Target t = remaining.get(i);
-                    int cost = transitionCost(curA, curB, t.posA, t.posB, P, curActA, curActB);
-                    if (cost < bestCost) {
-                        bestCost = cost;
-                        bestIdx = i;
-                    }
-                }
-                Target next = remaining.remove(bestIdx);
-                tour.add(next);
-                curA = next.posA;
-                curB = next.posB;
-                curActA = true;
-                curActB = true;
-            }
-
-            // 2-opt
-            boolean improved = true;
-            int iter = 0;
-            while (improved && iter++ < 40) {
-                improved = false;
-                for (int i = 0; i < tour.size() - 1; i++) {
-                    for (int j = i + 1; j < tour.size(); j++) {
-                        int prevA = (i == 0 ? startA : tour.get(i - 1).posA);
-                        int prevB = (i == 0 ? startB : tour.get(i - 1).posB);
-                        boolean prevActA = (i == 0 ? activeA : true);
-                        boolean prevActB = (i == 0 ? activeB : true);
-
-                        int curCost = transitionCost(prevA, prevB, tour.get(i).posA, tour.get(i).posB, P, prevActA, prevActB);
-                        for (int k = i; k < j; k++) {
-                            curCost += transitionCost(tour.get(k).posA, tour.get(k).posB, tour.get(k + 1).posA, tour.get(k + 1).posB, P, true, true);
-                        }
-                        if (j + 1 < tour.size()) {
-                            curCost += transitionCost(tour.get(j).posA, tour.get(j).posB, tour.get(j + 1).posA, tour.get(j + 1).posB, P, true, true);
-                        }
-
-                        int revCost = transitionCost(prevA, prevB, tour.get(j).posA, tour.get(j).posB, P, prevActA, prevActB);
-                        for (int k = j; k > i; k--) {
-                            revCost += transitionCost(tour.get(k).posA, tour.get(k).posB, tour.get(k - 1).posA, tour.get(k - 1).posB, P, true, true);
-                        }
-                        if (j + 1 < tour.size()) {
-                            revCost += transitionCost(tour.get(i).posA, tour.get(i).posB, tour.get(j + 1).posA, tour.get(j + 1).posB, P, true, true);
-                        }
-
-                        if (revCost < curCost) {
-                            Collections.reverse(tour.subList(i, j + 1));
-                            improved = true;
-                        }
-                    }
-                }
-            }
-
-            int finalCost = computeTourCost(tour, startA, startB, P, activeA, activeB);
-            if (finalCost < bestOverallCost) {
-                bestOverallCost = finalCost;
-                bestOverallTour = tour;
-            }
-        }
-
-        return bestOverallTour;
-    }
-
-    public static List<String> generateForPair(int R, List<Target> rawTargets, int trackA, int trackB, int requiredCount, int P) {
-        int posA = trackA * R;
-        int posB = trackB * R;
-        boolean activeA = false;
-        boolean activeB = false;
-
-        List<String> program = new ArrayList<>();
+        int[] freeTick = new int[6];
+        int nextFireTick = 0;
 
         for (int cycle = 0; cycle < requiredCount; cycle++) {
-            List<Target> cycleTargets = solveTSP(rawTargets, posA, posB, P, activeA, activeB);
+            Set<Point> unvisited = new HashSet<>(mCells);
 
-            for (Target target : cycleTargets) {
-                int destA = target.posA;
-                int destB = target.posB;
+            while (!unvisited.isEmpty()) {
+                List<Candidate> candidates = new ArrayList<>();
 
-                int sA = dist(posA, destA, P);
-                int sB = dist(posB, destB, P);
-                String dirA = getMoveDir(posA, destA, P);
-                String dirB = getMoveDir(posB, destB, P);
+                for (Point p : unvisited) {
+                    for (int u = 0; u < 6; u++) {
+                        for (int v = u + 1; v < 6; v++) {
+                            if (Math.abs(u - v) == 3) continue;
 
-                List<String> actionsA = new ArrayList<>();
-                if (activeA) actionsA.add("T");
-                for (int s = 0; s < sA; s++) actionsA.add(dirA);
-                actionsA.add("T");
+                            int reqPosU = lookups[u][p.r][p.c];
+                            int reqPosV = lookups[v][p.r][p.c];
+                            if (reqPosU == -1 || reqPosV == -1) continue;
 
-                List<String> actionsB = new ArrayList<>();
-                if (!activeB) actionsB.add("T");
-                for (int s = 0; s < sB; s++) actionsB.add(dirB);
+                            int distU = dist(pos[u], reqPosU, P);
+                            int distV = dist(pos[v], reqPosV, P);
 
-                int totalTicks = Math.max(actionsA.size(), actionsB.size());
-                String[] scheduledA = new String[totalTicks];
-                Arrays.fill(scheduledA, "-");
-                for (int i = 0; i < actionsA.size() - 1; i++) {
-                    scheduledA[i] = actionsA.get(i);
-                }
-                scheduledA[totalTicks - 1] = "T";
+                            int readyTime = Math.max(freeTick[u] + distU, freeTick[v] + distV);
+                            int fireTick = Math.max(nextFireTick, readyTime);
 
-                String[] scheduledB = new String[totalTicks];
-                Arrays.fill(scheduledB, "-");
-                for (int i = 0; i < actionsB.size(); i++) {
-                    scheduledB[i] = actionsB.get(i);
+                            candidates.add(new Candidate(p, u, v, fireTick, distU + distV, distU, distV));
+                        }
+                    }
                 }
 
-                for (int tick = 0; tick < totalTicks; tick++) {
-                    String[] line = {"-", "-", "-", "-", "-", "-"};
-                    line[trackA] = scheduledA[tick];
-                    line[trackB] = scheduledB[tick];
-                    program.add(String.join(" ", line));
+                candidates.sort(Comparator.comparingInt(Candidate::fireTick).thenComparingInt(Candidate::totalDist));
+
+                Candidate chosen;
+                if (rng == null || candidates.size() == 1 || greediness >= 1.0) {
+                    chosen = candidates.get(0);
+                } else {
+                    int bestFire = candidates.get(0).fireTick;
+                    int poolSize = 1;
+                    while (poolSize < candidates.size() && candidates.get(poolSize).fireTick <= bestFire + 1) {
+                        poolSize++;
+                    }
+                    poolSize = Math.min(poolSize, Math.max(1, (int)(candidates.size() * (1.0 - greediness))));
+                    chosen = candidates.get(rng.nextInt(poolSize));
                 }
 
-                posA = destA;
-                posB = destB;
-                activeA = true;
-                activeB = true;
+                unvisited.remove(chosen.p);
+
+                int reqPosU = lookups[chosen.u][chosen.p.r][chosen.p.c];
+                int reqPosV = lookups[chosen.v][chosen.p.r][chosen.p.c];
+
+                String dirU = getMoveDir(pos[chosen.u], reqPosU, P);
+                for (int i = 0; i < chosen.distU; i++) cmds[chosen.u].add(dirU);
+                while (cmds[chosen.u].size() < chosen.fireTick) cmds[chosen.u].add("-");
+                cmds[chosen.u].add("T");
+                cmds[chosen.u].add("T");
+
+                String dirV = getMoveDir(pos[chosen.v], reqPosV, P);
+                for (int i = 0; i < chosen.distV; i++) cmds[chosen.v].add(dirV);
+                while (cmds[chosen.v].size() < chosen.fireTick) cmds[chosen.v].add("-");
+                cmds[chosen.v].add("T");
+                cmds[chosen.v].add("T");
+
+                pos[chosen.u] = reqPosU;
+                pos[chosen.v] = reqPosV;
+                freeTick[chosen.u] = chosen.fireTick + 2;
+                freeTick[chosen.v] = chosen.fireTick + 2;
+                nextFireTick = chosen.fireTick + 1;
             }
+        }
+
+        int maxLen = 0;
+        for (int i = 0; i < 6; i++) maxLen = Math.max(maxLen, cmds[i].size());
+
+        List<String> program = new ArrayList<>(maxLen);
+        for (int tick = 0; tick < maxLen; tick++) {
+            String[] line = {"-", "-", "-", "-", "-", "-"};
+            for (int i = 0; i < 6; i++) {
+                if (tick < cmds[i].size()) line[i] = cmds[i].get(tick);
+            }
+            program.add(String.join(" ", line));
         }
 
         return program;
     }
 
-    public static List<String> findBestProgram(int R, char[][] patternGrid, int requiredCount, List<Point> mCells) {
+    public static List<String> findBestProgram(int R, int requiredCount, List<Point> mCells, int iterations, Random rng) {
         List<Point> perim = buildPerimeter(R);
-        int P = perim.size();
         int[][][] lookups = precomputePerimLookups(R, perim);
 
-        List<String> bestProgram = null;
-
-        for (int tA = 0; tA < 6; tA++) {
-            for (int tB = 0; tB < 6; tB++) {
-                if (tA == tB || Math.abs(tA - tB) == 3) continue;
-
-                List<Target> targets = new ArrayList<>(mCells.size());
-                boolean possible = true;
-                for (Point p : mCells) {
-                    int posA = lookups[tA][p.r][p.c];
-                    int posB = lookups[tB][p.r][p.c];
-                    if (posA == -1 || posB == -1) {
-                        possible = false;
-                        break;
-                    }
-                    targets.add(new Target(p, posA, posB));
-                }
-                if (!possible) continue;
-
-                List<String> prog = generateForPair(R, targets, tA, tB, requiredCount, P);
-                if (bestProgram == null || prog.size() < bestProgram.size()) {
-                    bestProgram = prog;
-                }
+        List<String> best = solveGRASP(R, perim, lookups, requiredCount, mCells, null, 1.0);
+        for (int it = 0; it < iterations; it++) {
+            List<String> cand = solveGRASP(R, perim, lookups, requiredCount, mCells, rng, 0.85);
+            if (cand.size() < best.size()) {
+                best = cand;
             }
         }
-        return bestProgram;
+        return best;
     }
 
-    static class Simulator {
+    public static class Simulator {
         final int R, numRows, numCols, pRows, pCols, requiredCount;
         final List<Point> perimeter;
         final char[][] baseGrid;
@@ -277,7 +188,7 @@ public class Level6 {
         int acceptedPatterns = 0;
         final char[][] patternGrid;
 
-        Simulator(int boardRadius, char[][] patternGrid, int requiredCount) {
+        public Simulator(int boardRadius, char[][] patternGrid, int requiredCount) {
             this.R = boardRadius;
             this.numRows = 2 * R + 1;
             this.numCols = 4 * R + 1;
@@ -304,7 +215,7 @@ public class Level6 {
             }
         }
 
-        void step(String instructionLine) {
+        public void step(String instructionLine) {
             for (int r = 0; r < numRows; r++) {
                 for (int c = 0; c < numCols; c++) {
                     char ch = grid[r][c];
@@ -381,7 +292,7 @@ public class Level6 {
         }
     }
 
-    public static String processFile(Path inputPath) throws IOException {
+    public static String processFile(Path inputPath, int iters, Random rng) throws IOException {
         List<String> inLines = Files.readAllLines(inputPath);
         int idx = 0;
         int n = Integer.parseInt(inLines.get(idx++).trim());
@@ -408,10 +319,10 @@ public class Level6 {
                 }
             }
 
-            List<String> prog = findBestProgram(radius, patternGrid, req, mCells);
+            List<String> prog = findBestProgram(radius, req, mCells, iters, rng);
             totalInstructions += prog.size();
 
-            // Simulate to ensure 100% verification
+            // Self-verify every board through simulator
             Simulator sim = new Simulator(radius, patternGrid, req);
             for (String stepStr : prog) {
                 sim.step(stepStr);
@@ -425,7 +336,7 @@ public class Level6 {
             }
             out.append("\n");
 
-            if ((b + 1) % 20 == 0 || b + 1 == n) {
+            if ((b + 1) % 30 == 0 || b + 1 == n) {
                 System.out.printf("  Board %d / %d processed... (total lines so far: %d)\n", b + 1, n, totalInstructions);
             }
         }
@@ -436,40 +347,41 @@ public class Level6 {
 
     public static void main(String[] args) throws IOException {
         Path baseDir = Paths.get("d:/CCC42/CCC42/level-6");
+        Random rng = new Random(42);
 
-        // Small
+        // Small (50 iterations)
         Path smallIn = baseDir.resolve("in_level-6_1-small.txt");
         Path smallOut = baseDir.resolve("out_level-6_1-small.txt");
         if (Files.exists(smallIn)) {
             System.out.println("Processing Small...");
-            String result = processFile(smallIn);
+            String result = processFile(smallIn, 50, rng);
             Files.writeString(smallOut, result);
         }
 
-        // Medium
+        // Medium (15 iterations)
         Path medIn = baseDir.resolve("in_level-6_2-medium.txt");
         Path medOut = baseDir.resolve("out_level-6_2-medium.txt");
         if (Files.exists(medIn)) {
             System.out.println("Processing Medium...");
-            String result = processFile(medIn);
+            String result = processFile(medIn, 15, rng);
             Files.writeString(medOut, result);
         }
 
-        // Large
+        // Large (10 iterations)
         Path largeIn = baseDir.resolve("in_level-6_3-large.txt");
         Path largeOut = baseDir.resolve("out_level-6_3-large.txt");
         if (Files.exists(largeIn)) {
             System.out.println("Processing Large...");
-            String result = processFile(largeIn);
+            String result = processFile(largeIn, 10, rng);
             Files.writeString(largeOut, result);
         }
 
-        // Enormous
+        // Enormous (8 iterations)
         Path enorIn = baseDir.resolve("in_level-6_4-enormous.txt");
         Path enorOut = baseDir.resolve("out_level-6_4-enormous.txt");
         if (Files.exists(enorIn)) {
             System.out.println("Processing Enormous...");
-            String result = processFile(enorIn);
+            String result = processFile(enorIn, 8, rng);
             Files.writeString(enorOut, result);
         }
     }
