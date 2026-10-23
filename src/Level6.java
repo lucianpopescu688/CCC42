@@ -4,15 +4,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 public class Level6 {
 
-    private record Candidate(int firstEmitter, int firstPosition, int secondEmitter, int secondPosition) {}
+    private record Candidate(int firstEmitter, int firstPosition, int secondEmitter, int secondPosition,
+                             Set<Level5.Point> cells) {}
     private record Pattern(int radius, int count, List<Level5.Point> cells) {}
 
     private static List<String> generateProgram(int radius, List<Level5.Point> cells, int count) {
@@ -23,7 +22,8 @@ public class Level6 {
         int[] colSteps = {2, 1, -1, -2, -1, 1};
 
         Set<Level5.Point> target = new HashSet<>(cells);
-        Map<Level5.Point, List<Candidate>> candidatesByCell = new HashMap<>();
+        List<Candidate> batchCandidates = new ArrayList<>();
+        List<Candidate> singleCellCandidates = new ArrayList<>();
 
         List<Set<Level5.Point>[]> raysByPosition = new ArrayList<>(perimeterLength);
         for (int position = 0; position < perimeterLength; position++) {
@@ -51,78 +51,152 @@ public class Level6 {
                     Set<Level5.Point> firstRay = raysByPosition.get(firstPosition)[firstEmitter];
                     for (int secondPosition = 0; secondPosition < perimeterLength; secondPosition++) {
                         Set<Level5.Point> secondRay = raysByPosition.get(secondPosition)[secondEmitter];
-                        Level5.Point intersection = null;
-                        boolean multipleIntersections = false;
+                        Set<Level5.Point> intersections = new HashSet<>();
+                        boolean onlyTargetCells = true;
                         for (Level5.Point cell : firstRay) {
                             if (secondRay.contains(cell)) {
-                                if (intersection != null) {
-                                    multipleIntersections = true;
+                                if (!target.contains(cell)) {
+                                    onlyTargetCells = false;
                                     break;
                                 }
-                                intersection = cell;
+                                intersections.add(cell);
                             }
                         }
-                        if (!multipleIntersections && intersection != null && target.contains(intersection)) {
-                            candidatesByCell.computeIfAbsent(intersection, ignored -> new ArrayList<>())
-                                    .add(new Candidate(firstEmitter, firstPosition, secondEmitter, secondPosition));
+                        if (onlyTargetCells && !intersections.isEmpty()) {
+                            batchCandidates.add(new Candidate(firstEmitter, firstPosition, secondEmitter, secondPosition,
+                                    Set.copyOf(intersections)));
+                            for (Level5.Point cell : intersections) {
+                                singleCellCandidates.add(new Candidate(firstEmitter, firstPosition, secondEmitter,
+                                        secondPosition, Set.of(cell)));
+                            }
                         }
                     }
                 }
             }
         }
 
+        List<String> batchedProgram = generateUsingCandidates(radius, cells, count, perimeterLength, batchCandidates);
+        List<String> singleCellProgram = generateUsingCandidates(radius, cells, count, perimeterLength,
+                singleCellCandidates);
+        return batchedProgram.size() < singleCellProgram.size() ? batchedProgram : singleCellProgram;
+    }
+
+    private static List<String> generateUsingCandidates(int radius, List<Level5.Point> cells, int count,
+                                                         int perimeterLength, List<Candidate> candidates) {
         int[] positions = {5 * radius, 0, radius, 2 * radius, 3 * radius, 4 * radius};
         boolean[] active = new boolean[6];
         List<String> program = new ArrayList<>();
 
         for (int repetition = 0; repetition < count; repetition++) {
-            for (Level5.Point cell : cells) {
-                List<Candidate> candidates = candidatesByCell.get(cell);
-                if (candidates == null || candidates.isEmpty()) {
-                    throw new IllegalStateException("No pair of emitter rays can create target cell " + cell);
-                }
-
+            Set<Level5.Point> remaining = new HashSet<>(cells);
+            while (!remaining.isEmpty()) {
                 Candidate best = null;
-                int bestDistance = Integer.MAX_VALUE;
-                int bestTotalDistance = Integer.MAX_VALUE;
                 for (Candidate candidate : candidates) {
-                    int firstDistance = circularDistance(positions[candidate.firstEmitter()],
-                            candidate.firstPosition(), perimeterLength);
-                    int secondDistance = circularDistance(positions[candidate.secondEmitter()],
-                            candidate.secondPosition(), perimeterLength);
-                    int distance = Math.max(firstDistance, secondDistance);
-                    int totalDistance = firstDistance + secondDistance;
-                    if (distance < bestDistance || (distance == bestDistance && totalDistance < bestTotalDistance)) {
+                    int gain = 0;
+                    for (Level5.Point cell : candidate.cells()) {
+                        if (remaining.contains(cell)) gain++;
+                    }
+                    if (gain == 0) continue;
+
+                    int cost = transitionCost(candidate, positions, active, perimeterLength);
+                    if (best == null || isBetterCandidate(candidate, gain, cost, best, remaining,
+                            positions, active, perimeterLength)) {
                         best = candidate;
-                        bestDistance = distance;
-                        bestTotalDistance = totalDistance;
                     }
                 }
+                if (best == null) {
+                    throw new IllegalStateException("No emitter pair can create remaining target cells " + remaining);
+                }
 
-                appendDeactivation(program, active);
+                int firstDistance = circularDistance(positions[best.firstEmitter()], best.firstPosition(), perimeterLength);
+                int secondDistance = circularDistance(positions[best.secondEmitter()], best.secondPosition(), perimeterLength);
+                int distance = Math.max(firstDistance, secondDistance);
                 int firstDirection = movementDirection(positions[best.firstEmitter()], best.firstPosition(), perimeterLength);
                 int secondDirection = movementDirection(positions[best.secondEmitter()], best.secondPosition(), perimeterLength);
-                for (int step = 0; step < bestDistance; step++) {
-                    char[] instruction = noops();
-                    if (positions[best.firstEmitter()] != best.firstPosition()) {
-                        moveEmitter(instruction, positions, best.firstEmitter(), firstDirection, perimeterLength);
+                if (distance > 0) {
+                    boolean[] wasActive = active.clone();
+                    char[] firstMovement = noops();
+                    for (int emitter = 0; emitter < active.length; emitter++) {
+                        if (active[emitter]) {
+                            firstMovement[emitter] = 'T';
+                            active[emitter] = false;
+                        }
                     }
-                    if (positions[best.secondEmitter()] != best.secondPosition()) {
-                        moveEmitter(instruction, positions, best.secondEmitter(), secondDirection, perimeterLength);
+                    if (!wasActive[best.firstEmitter()] && positions[best.firstEmitter()] != best.firstPosition()) {
+                        moveEmitter(firstMovement, positions, best.firstEmitter(), firstDirection, perimeterLength);
                     }
-                    program.add(format(instruction));
+                    if (!wasActive[best.secondEmitter()] && positions[best.secondEmitter()] != best.secondPosition()) {
+                        moveEmitter(firstMovement, positions, best.secondEmitter(), secondDirection, perimeterLength);
+                    }
+                    program.add(format(firstMovement));
+
+                    while (positions[best.firstEmitter()] != best.firstPosition()
+                            || positions[best.secondEmitter()] != best.secondPosition()) {
+                        char[] movement = noops();
+                        if (positions[best.firstEmitter()] != best.firstPosition()) {
+                            moveEmitter(movement, positions, best.firstEmitter(), firstDirection, perimeterLength);
+                        }
+                        if (positions[best.secondEmitter()] != best.secondPosition()) {
+                            moveEmitter(movement, positions, best.secondEmitter(), secondDirection, perimeterLength);
+                        }
+                        program.add(format(movement));
+                    }
                 }
 
                 char[] fire = noops();
-                fire[best.firstEmitter()] = 'T';
-                fire[best.secondEmitter()] = 'T';
-                active[best.firstEmitter()] = true;
-                active[best.secondEmitter()] = true;
+                for (int emitter = 0; emitter < active.length; emitter++) {
+                    boolean shouldBeActive = emitter == best.firstEmitter() || emitter == best.secondEmitter();
+                    if (active[emitter] != shouldBeActive) {
+                        fire[emitter] = 'T';
+                        active[emitter] = shouldBeActive;
+                    }
+                }
                 program.add(format(fire));
+                remaining.removeAll(best.cells());
             }
         }
 
         return program;
+    }
+
+    private static int transitionCost(Candidate candidate, int[] positions, boolean[] active, int perimeterLength) {
+        int[] emitters = {candidate.firstEmitter(), candidate.secondEmitter()};
+        int[] destinations = {candidate.firstPosition(), candidate.secondPosition()};
+        int[] distances = new int[2];
+        int activeMoves = 0;
+        int inactiveMoves = 0;
+        boolean anyActive = false;
+        for (int i = 0; i < emitters.length; i++) {
+            int emitter = emitters[i];
+            distances[i] = circularDistance(positions[emitter], destinations[i], perimeterLength);
+            if (active[emitter]) {
+                anyActive = true;
+                activeMoves = Math.max(activeMoves, distances[i]);
+            } else {
+                inactiveMoves = Math.max(inactiveMoves, distances[i]);
+            }
+        }
+        int movementTicks;
+        if (!anyActive) {
+            movementTicks = Math.max(activeMoves, inactiveMoves);
+        } else {
+            movementTicks = 1 + Math.max(activeMoves, Math.max(0, inactiveMoves - 1));
+        }
+        return movementTicks + 1;
+    }
+
+    private static boolean isBetterCandidate(Candidate candidate, int gain, int cost, Candidate best,
+                                             Set<Level5.Point> remaining, int[] positions, boolean[] active,
+                                             int perimeterLength) {
+        int bestGain = 0;
+        for (Level5.Point cell : best.cells()) {
+            if (remaining.contains(cell)) bestGain++;
+        }
+        int bestCost = transitionCost(best, positions, active, perimeterLength);
+        long comparison = (long) gain * bestCost - (long) bestGain * cost;
+        if (comparison != 0) return comparison > 0;
+        if (gain != bestGain) return gain > bestGain;
+        return cost < bestCost;
     }
 
     private static int circularDistance(int from, int to, int perimeterLength) {
@@ -142,19 +216,6 @@ public class Level6 {
         if (direction == 0) return;
         instruction[emitter] = direction > 0 ? 'F' : 'B';
         positions[emitter] = (positions[emitter] + direction + perimeterLength) % perimeterLength;
-    }
-
-    private static void appendDeactivation(List<String> program, boolean[] active) {
-        char[] instruction = noops();
-        boolean hasActiveEmitter = false;
-        for (int emitter = 0; emitter < active.length; emitter++) {
-            if (active[emitter]) {
-                instruction[emitter] = 'T';
-                active[emitter] = false;
-                hasActiveEmitter = true;
-            }
-        }
-        if (hasActiveEmitter) program.add(format(instruction));
     }
 
     private static char[] noops() {
