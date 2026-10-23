@@ -1091,6 +1091,19 @@ public class Level6 {
         if (origProg == null || origProg.isEmpty()) return origProg;
         List<String> current = new ArrayList<>(origProg);
 
+        // Pass 0: Aggressively remove any single line if removing it still passes verification
+        // (most useful on over-conservative generated timelines)
+        if (current.size() <= 1200) {
+            for (int i = current.size() - 1; i >= 0; i--) {
+                List<String> candidate = new ArrayList<>(current);
+                candidate.remove(i);
+                if (!candidate.isEmpty() && verifyAndTrimProgram(R, patternGrid, requiredCount, candidate)) {
+                    current = candidate;
+                    if (i > current.size()) i = current.size();
+                }
+            }
+        }
+
         // Pass 1: Remove any "- - - - - -" line if removing it still passes verification
         for (int i = current.size() - 1; i >= 0; i--) {
             if (current.get(i).equals("- - - - - -")) {
@@ -1361,7 +1374,7 @@ public class Level6 {
         }
 
         // 4. Evaluate 6-Emitter Wavefront Scheduler (deterministic + multi-start randomized)
-        int restarts = (mCells.size() * requiredCount <= 120) ? 16 : 6;
+        int restarts = (mCells.size() * requiredCount <= 120) ? 256 : 128;
         for (int seed = 0; seed < restarts; seed++) {
             int limit = (bestProg != null) ? bestProg.size() : Integer.MAX_VALUE;
             List<String> parProg = solveWavefrontSixEmitter(meta, requiredCount, seed, limit);
